@@ -1,1 +1,12 @@
-index.html
+<script>
+  // Initialize the agent at application startup.
+  const fpPromise = import('https://fpjscdn.net/v4/EmFvIRW5pKEzJcevcU7d')
+    .then(Fingerprint => Fingerprint.start({
+      region: "ap"
+    }))
+
+  // Get the visitor and event identifier when you need it.
+  fpPromise
+    .then(fp => fp.get())
+    .then(result => console.log(result.event_id, result.visitor_id, JSON.stringify(result)))
+</script>
