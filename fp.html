@@ -72,7 +72,7 @@
     ['(any-pointer:fine)','(any-pointer:coarse)','(any-hover:hover)','(color-gamut:srgb)','(color-gamut:p3)',
      '(dynamic-range:high)','(display-mode:standalone)'].forEach(q => rec('mm.' + q, mq(q)));
 
-    rec('speechSynthesis.voices', safe(() => { const v = speechSynthesis.getVoices(); return v.length + ' voices; ' + v.slice(0, 4).map(x => x.name).join(' | '); }));
+    // speechSynthesis.getVoices() is ASYNC — empty until 'voiceschanged' fires. Read it in the jobs block below.
 
     // WebGL renderer / vendor
     try {
@@ -103,6 +103,11 @@
 
     // ---- async probes ----
     const jobs = [];
+    jobs.push(new Promise(res => {
+      const read = () => { const v = speechSynthesis.getVoices(); R.direct['speechSynthesis.voices'] = v.length + ' voices; ' + v.slice(0, 4).map(x => x.name).join(' | '); res(); };
+      if (speechSynthesis.getVoices().length) return read();
+      speechSynthesis.onvoiceschanged = read; setTimeout(read, 1000);
+    }));
     if (n.userAgentData && n.userAgentData.getHighEntropyValues)
       jobs.push(n.userAgentData.getHighEntropyValues(['architecture','bitness','model','platformVersion','uaFullVersion','fullVersionList'])
         .then(v => { R.direct['uaData.highEntropy'] = JSON.stringify(v); }).catch(e => warn('highEntropy: ' + e.message)));
