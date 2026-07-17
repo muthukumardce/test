@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DataDome fingerprint probe — Eagle</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; background: #fff; color: #111; }
+  @media (prefers-color-scheme: dark) { body { background: #14161a; color: #e6e6e6; } }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { opacity: .65; font-size: 12px; margin-bottom: 16px; }
+  .bar { margin: 12px 0 18px; }
+  button { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid #8884; background: #6a8cff22; color: inherit; cursor: pointer; }
+  button:hover { background: #6a8cff44; }
+  .card { border: 1px solid #8883; border-radius: 10px; margin: 0 0 16px; overflow: hidden; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; margin: 0; padding: 10px 14px; background: #8881; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 5px 14px; border-top: 1px solid #8882; vertical-align: top; word-break: break-word; }
+  td.k { width: 42%; opacity: .8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  td.v { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .ok { color: #1a9e4b; } .bad { color: #e5484d; font-weight: 600; }
+  .warns { border: 1px solid #e5484d; border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; background: #e5484d14; }
+  .warns.clean { border-color: #1a9e4b; background: #1a9e4b14; }
+  .warns li { margin: 3px 0; }
+  code { background: #8882; padding: 1px 5px; border-radius: 4px; }
+  .note { font-size: 12px; opacity: .7; margin-top: 20px; }
+</style>
+</head>
+<body>
+<h1>DataDome fingerprint probe</h1>
+<div class="sub">Reads back exactly the signals DataDome's interstitial device-check collects, and runs the same anti-spoof coherence checks. Run in Eagle AND stock Chrome 144, then diff the JSON. Does not run or bypass DataDome — observation only.</div>
+<div class="bar"><button id="copy">Copy report JSON</button> <button id="rerun">Re-run</button> <span id="secwarn" class="bad"></span></div>
+<div id="out">Running…</div>
+
+<script>
+(function () {
+  'use strict';
+
+  function safe(f) { try { const v = f(); return v === undefined ? '∅undefined' : v; } catch (e) { return 'THREW:' + e.message; } }
+  function djb2(str) { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0; return h.toString(16); }
+  const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n; };
+
+  async function collect() {
+    const R = { meta: {}, direct: {}, coherence: {}, warnings: [] };
+    const n = navigator, s = screen;
+    const rec = (k, v) => { R.direct[k] = v; };
+    const warn = m => R.warnings.push(m);
+
+    R.meta.href = location.href;
+    R.meta.secureContext = self.isSecureContext;
+    R.meta.time = new Date().toISOString();
+    R.meta.ua = n.userAgent;
+
+    ['webdriver','hardwareConcurrency','deviceMemory','maxTouchPoints','platform','vendor',
+     'language','productSub','pdfViewerEnabled','onLine','buildID','brave','genspark','R','oscpu','doNotTrack']
+      .forEach(p => rec('navigator.' + p, safe(() => n[p])));
+    rec('navigator.languages', safe(() => (n.languages || []).join(',')));
+    rec('navigator.plugins.length', safe(() => n.plugins && n.plugins.length));
+    rec('navigator.mimeTypes.length', safe(() => n.mimeTypes && n.mimeTypes.length));
+
+    rec('uaData.platform', safe(() => n.userAgentData && n.userAgentData.platform));
+    rec('uaData.mobile', safe(() => n.userAgentData && n.userAgentData.mobile));
+    rec('uaData.brands', safe(() => JSON.stringify(n.userAgentData && n.userAgentData.brands)));
+
+    ['width','height','availWidth','availHeight','colorDepth','pixelDepth'].forEach(p => rec('screen.' + p, safe(() => s[p])));
+    rec('screen.orientation.type', safe(() => s.orientation && s.orientation.type));
+    rec('window.devicePixelRatio', safe(() => devicePixelRatio));
+    rec('window.inner', safe(() => innerWidth + 'x' + innerHeight));
+
+    const mq = q => safe(() => matchMedia(q).matches);
+    ['(any-pointer:fine)','(any-pointer:coarse)','(any-hover:hover)','(color-gamut:srgb)','(color-gamut:p3)',
+     '(dynamic-range:high)','(display-mode:standalone)'].forEach(q => rec('mm.' + q, mq(q)));
+
+    rec('speechSynthesis.voices', safe(() => { const v = speechSynthesis.getVoices(); return v.length + ' voices; ' + v.slice(0, 4).map(x => x.name).join(' | '); }));
+
+    // WebGL renderer / vendor
+    try {
+      const c = document.createElement('canvas'); const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+      if (gl) {
+        const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+        rec('webgl.VENDOR', gl.getParameter(gl.VENDOR));
+        rec('webgl.RENDERER', gl.getParameter(gl.RENDERER));
+        rec('webgl.UNMASKED_VENDOR', dbg && gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL));
+        rec('webgl.UNMASKED_RENDERER', dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+        rec('webgl.VERSION', gl.getParameter(gl.VERSION));
+        rec('webgl.extensions#', (gl.getSupportedExtensions() || []).length);
+      } else rec('webgl', 'NO CONTEXT');
+    } catch (e) { warn('webgl read failed: ' + e.message); }
+
+    // canvas 2D hash
+    try {
+      const cv = document.createElement('canvas'); cv.width = 240; cv.height = 60; const x = cv.getContext('2d');
+      x.textBaseline = 'top'; x.font = "16px 'Arial'"; x.fillStyle = '#f60'; x.fillRect(0, 0, 120, 20);
+      x.fillStyle = '#069'; x.fillText('DataDome,fp,\u{1F600}', 2, 15);
+      const url = cv.toDataURL();
+      rec('canvas2d.dataURL.len', url.length); rec('canvas2d.hash', djb2(url));
+    } catch (e) { warn('canvas read failed: ' + e.message); }
+
+    // audio
+    try { const AC = self.AudioContext || self.webkitAudioContext; const ac = new AC(); rec('audio.sampleRate', ac.sampleRate); rec('audio.baseLatency', ac.baseLatency); ac.close && ac.close(); }
+    catch (e) { warn('audio read failed: ' + e.message); }
+
+    // ---- async probes ----
+    const jobs = [];
+    if (n.userAgentData && n.userAgentData.getHighEntropyValues)
+      jobs.push(n.userAgentData.getHighEntropyValues(['architecture','bitness','model','platformVersion','uaFullVersion','fullVersionList'])
+        .then(v => { R.direct['uaData.highEntropy'] = JSON.stringify(v); }).catch(e => warn('highEntropy: ' + e.message)));
+    if (n.keyboard && n.keyboard.getLayoutMap)
+      jobs.push(n.keyboard.getLayoutMap().then(m => { R.direct['keyboard.layoutSize'] = m && m.size; }).catch(() => {}));
+    if (n.storage && n.storage.estimate)
+      jobs.push(n.storage.estimate().then(e => { R.direct['storage.quota'] = e && e.quota; }).catch(() => {}));
+    if (n.permissions && n.permissions.query)
+      jobs.push(n.permissions.query({ name: 'notifications' }).then(r => { R.direct['perm.notifications'] = r.state; }).catch(() => {}));
+
+    // WebGPU adapter (secure-context only)
+    if (n.gpu && n.gpu.requestAdapter) {
+      R.direct['webgpu.preferredFormat'] = safe(() => n.gpu.getPreferredCanvasFormat && n.gpu.getPreferredCanvasFormat());
+      jobs.push(n.gpu.requestAdapter().then(a => {
+        if (!a) { R.direct['webgpu.adapter'] = 'null'; return; }
+        const p = a.requestAdapterInfo ? a.requestAdapterInfo() : Promise.resolve(a.info);
+        return Promise.resolve(p).then(info => { R.direct['webgpu.adapterInfo'] = info ? JSON.stringify({ vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description }) : 'empty'; });
+      }).catch(e => warn('webgpu: ' + e.message)));
+    } else { R.direct['webgpu'] = self.isSecureContext ? 'ABSENT' : 'ABSENT (insecure context — serve via http://localhost or https)'; }
+
+    await Promise.allSettled(jobs);
+
+    // ---- coherence checks (what DataDome does) ----
+    // 1) fresh-iframe re-read: does the spoof hold in a pristine child frame?
+    try {
+      const ifr = document.createElement('iframe'); ifr.style.display = 'none'; ifr.src = 'about:blank';
+      document.documentElement.appendChild(ifr);
+      const iw = ifr.contentWindow;
+      [['navigator.webdriver', () => [n.webdriver, iw.navigator.webdriver]],
+       ['navigator.hardwareConcurrency', () => [n.hardwareConcurrency, iw.navigator.hardwareConcurrency]],
+       ['navigator.deviceMemory', () => [n.deviceMemory, iw.navigator.deviceMemory]],
+       ['navigator.platform', () => [n.platform, iw.navigator.platform]],
+       ['navigator.userAgent', () => [n.userAgent, iw.navigator.userAgent]],
+       ['navigator.maxTouchPoints', () => [n.maxTouchPoints, iw.navigator.maxTouchPoints]]
+      ].forEach(([k, f]) => { try { const [a, b] = f(); R.coherence[k] = { main: String(a), iframe: String(b), MATCH: a === b }; if (a !== b) warn('IFRAME MISMATCH ' + k + ': main=' + a + ' iframe=' + b + '  — spoof leaks in child frame (DataDome catches this)'); } catch (e) { R.coherence[k] = 'THREW:' + e.message; } });
+      document.documentElement.removeChild(ifr);
+    } catch (e) { warn('iframe coherence failed: ' + e.message); }
+
+    // 2) getter nativeness
+    ['webdriver','hardwareConcurrency','deviceMemory','platform'].forEach(p => {
+      try { const d = Object.getOwnPropertyDescriptor(Navigator.prototype, p); const g = d && d.get;
+        R.coherence['getter.' + p] = g ? (/\[native code\]/.test(g.toString()) ? 'native' : 'JS-SHIM: ' + g.toString().replace(/\s+/g, ' ').slice(0, 50)) : 'own-value';
+        if (g && !/\[native code\]/.test(g.toString())) warn('NON-NATIVE getter navigator.' + p + ' — JS shim, detectable');
+      } catch (_) {}
+    });
+
+    // 3) GPU family cross-API coherence (WebGL vs WebGPU)
+    const fam = t => { t = String(t || ''); return /nvidia|geforce|rtx|gtx/i.test(t) ? 'nvidia' : /amd|radeon/i.test(t) ? 'amd' : /intel|iris|uhd/i.test(t) ? 'intel' : /apple/i.test(t) ? 'apple' : /swiftshader|llvmpipe|mesa|software/i.test(t) ? 'software' : '?'; };
+    const a = fam(R.direct['webgl.UNMASKED_RENDERER']), b = fam(R.direct['webgpu.adapterInfo']);
+    if (R.direct['webgpu.adapterInfo'] && b !== '?') { R.coherence['gpu.webgl_vs_webgpu'] = { webgl: a, webgpu: b, MATCH: a === b }; if (a !== b && a !== '?') warn('GPU FAMILY MISMATCH: WebGL=' + a + ' WebGPU=' + b + ' — cross-API GPU incoherence'); }
+
+    return R;
+  }
+
+  function render(R) {
+    const out = document.getElementById('out'); out.textContent = '';
+    document.getElementById('secwarn').textContent = R.meta.secureContext ? '' : '⚠ insecure context: WebGPU check disabled — serve via http://localhost or https';
+
+    const w = el('div', 'warns' + (R.warnings.length ? '' : ' clean'));
+    w.appendChild(el('strong', null, R.warnings.length ? ('⚠ ' + R.warnings.length + ' coherence tell(s):') : '✓ No coherence tells flagged by this harness.'));
+    if (R.warnings.length) { const ul = el('ul'); R.warnings.forEach(m => ul.appendChild(el('li', 'bad', m))); w.appendChild(ul); }
+    out.appendChild(w);
+
+    function section(title, obj, isCoh) {
+      const card = el('div', 'card'); card.appendChild(el('h2', null, title));
+      const tbl = el('table');
+      for (const k of Object.keys(obj)) {
+        const tr = el('tr'); tr.appendChild(el('td', 'k', k));
+        const td = el('td', 'v'); const v = obj[k];
+        if (isCoh && v && typeof v === 'object' && 'MATCH' in v) { td.innerHTML = ''; td.appendChild(el('span', v.MATCH ? 'ok' : 'bad', (v.MATCH ? '✓ ' : '✗ ') + 'main=' + v.main + ' | iframe/other=' + (v.iframe || v.webgpu))); }
+        else if (isCoh && typeof v === 'string' && /JS-SHIM|THREW/.test(v)) { td.className = 'v bad'; td.textContent = v; }
+        else td.textContent = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        tr.appendChild(td); tbl.appendChild(tr);
+      }
+      card.appendChild(tbl); out.appendChild(card);
+    }
+    section('Identity', R.meta);
+    section('Collected signals', R.direct);
+    section('Coherence checks (DataDome-style)', R.coherence, true);
+    window.__DD_REPORT = R;
+  }
+
+  async function run() { document.getElementById('out').textContent = 'Running…'; const R = await collect(); render(R); }
+  document.getElementById('rerun').onclick = run;
+  document.getElementById('copy').onclick = () => { navigator.clipboard.writeText(JSON.stringify(window.__DD_REPORT, null, 2)).then(() => { const b = document.getElementById('copy'); b.textContent = 'Copied ✓'; setTimeout(() => b.textContent = 'Copy report JSON', 1200); }); };
+  run();
+})();
+</script>
+</body>
+</html>
